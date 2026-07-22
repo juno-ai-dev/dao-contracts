@@ -13,9 +13,10 @@ use cosmwasm_std::{CustomQuery, QuerierWrapper, QueryRequest, StdResult, Uint128
 #[cw_serde]
 #[derive(Eq)]
 pub enum JunoQuery {
-    /// Bonded voting power for `address` at-or-before `height`, with LSTs
-    /// excluded. The chain returns the most recent snapshot whose recorded
-    /// height is `<= height`; zero if no snapshot exists.
+    /// Bonded voting power for `address` at-or-before `height`, excluding
+    /// addresses on Juno's governance-managed LST allowlist. The chain returns
+    /// the most recent snapshot whose recorded height is `<= height`; zero if
+    /// no snapshot exists.
     VotingPowerAt(VotingPowerAt),
     /// Total bonded voting power at-or-before `height`.
     TotalVotingPowerAt(TotalVotingPowerAt),

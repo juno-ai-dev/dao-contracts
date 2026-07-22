@@ -1,10 +1,11 @@
 use cosmwasm_std::testing::{mock_env, mock_info};
-use cosmwasm_std::{from_json, Addr, Uint128};
+use cosmwasm_std::{from_json, to_json_vec, Addr, Uint128};
 use cw2::{get_contract_version, set_contract_version};
 use dao_interface::voting::{
     InfoResponse, TotalPowerAtHeightResponse, VotingPowerAtHeightResponse,
 };
 
+use crate::bindings::{JunoQuery, TotalVotingPowerAt, VotingPowerAt};
 use crate::contract::{instantiate, migrate, query, CONTRACT_NAME, CONTRACT_VERSION};
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 
@@ -26,6 +27,25 @@ fn instantiate_module(
     )
     .unwrap();
     assert_eq!(response.attributes[0].value, "instantiate");
+}
+
+#[test]
+fn custom_query_json_matches_juno_v30_wire_format() {
+    assert_eq!(
+        to_json_vec(&JunoQuery::VotingPowerAt(VotingPowerAt {
+            address: VOTER_A.to_string(),
+            height: 41,
+        }))
+        .unwrap(),
+        br#"{"voting_power_at":{"address":"voter-a","height":41}}"#
+    );
+    assert_eq!(
+        to_json_vec(&JunoQuery::TotalVotingPowerAt(TotalVotingPowerAt {
+            height: 41,
+        }))
+        .unwrap(),
+        br#"{"total_voting_power_at":{"height":41}}"#
+    );
 }
 
 #[test]

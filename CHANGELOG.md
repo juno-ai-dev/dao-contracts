@@ -58,7 +58,7 @@ add the release or comparison link.
   liquid-staking-token exclusion chain-owned. Synchronous staking-delta hooks
   are intentionally not exposed because snapshots settle in EndBlock and
   validator-wide changes cannot be translated losslessly into per-delegator
-  callbacks.
+  callbacks ([#4](https://github.com/juno-ai-dev/dao-contracts/pull/4)).
 - Added the gauge orchestrator, gauge adapter, budget allocator, shared gauge
   interface, release scripts, operational documentation, schemas, and
   production-readiness checks.

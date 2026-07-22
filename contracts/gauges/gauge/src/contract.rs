@@ -2002,7 +2002,7 @@ mod execute {
                 GAUGES.save(deps.storage, gauge_id, &gauge)?;
                 Ok(Response::new()
                     .add_attribute("action", "reset_gauge")
-                    .add_attribute("sender", &sender)
+                    .add_attribute("sender", sender)
                     .add_attribute("gauge_id", gauge_id.to_string())
                     .add_attribute("processed", processed.to_string())
                     .add_attribute("complete", complete.to_string())
