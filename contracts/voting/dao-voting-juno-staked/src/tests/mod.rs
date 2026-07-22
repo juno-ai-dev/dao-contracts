@@ -5,9 +5,8 @@
 //! integration test stubs), so we wire a small `MockQuerier`-derived
 //! `JunoMockQuerier` that intercepts `QueryRequest::Custom(JunoQuery::..)`
 //! and returns canned snapshot values. That's enough to exercise the
-//! full query + sudo paths without needing a chain binary or multitest
+//! full query paths without needing a chain binary or multitest
 //! module shim.
 
-mod sudo;
 mod support;
 mod surface;

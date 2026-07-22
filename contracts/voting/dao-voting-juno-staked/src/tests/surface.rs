@@ -1,14 +1,14 @@
 use cosmwasm_std::testing::{mock_env, mock_info};
 use cosmwasm_std::{from_json, Addr, Uint128};
+use cw2::{get_contract_version, set_contract_version};
 use dao_interface::voting::{
     InfoResponse, TotalPowerAtHeightResponse, VotingPowerAtHeightResponse,
 };
 
-use crate::contract::{execute, instantiate, query};
-use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetHooksResponse, InstantiateMsg, QueryMsg};
+use crate::contract::{instantiate, migrate, query, CONTRACT_NAME, CONTRACT_VERSION};
+use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 
-use super::support::{juno_deps_with, SnapshotStore, DAO_ADDR, VOTER_A, VOTER_B};
+use super::support::{juno_deps_with, SnapshotStore, DAO_ADDR, VOTER_A};
 
 fn instantiate_module(
     deps: &mut cosmwasm_std::OwnedDeps<
@@ -18,152 +18,171 @@ fn instantiate_module(
         crate::bindings::JunoQuery,
     >,
 ) {
-    let info = mock_info(DAO_ADDR, &[]);
-    instantiate(
+    let response = instantiate(
         deps.as_mut(),
         mock_env(),
-        info,
-        InstantiateMsg {
-            auto_register_staking_hooks: Some(false),
-        },
+        mock_info(DAO_ADDR, &[]),
+        InstantiateMsg {},
     )
     .unwrap();
+    assert_eq!(response.attributes[0].value, "instantiate");
 }
 
 #[test]
-fn instantiate_stores_dao_address() {
-    let mut store = SnapshotStore::default();
-    store.set_default_total(0);
-    let mut deps = juno_deps_with(store);
+fn instantiate_sets_version_and_queries_instantiating_dao_and_info() {
+    let mut deps = juno_deps_with(SnapshotStore::default());
     instantiate_module(&mut deps);
 
-    let dao_bin = query(deps.as_ref(), mock_env(), QueryMsg::Dao {}).unwrap();
-    let dao: Addr = from_json(dao_bin).unwrap();
+    assert_eq!(
+        get_contract_version(&deps.storage).unwrap(),
+        cw2::ContractVersion {
+            contract: CONTRACT_NAME.to_string(),
+            version: CONTRACT_VERSION.to_string(),
+        }
+    );
+
+    let dao: Addr = from_json(query(deps.as_ref(), mock_env(), QueryMsg::Dao {}).unwrap()).unwrap();
     assert_eq!(dao, Addr::unchecked(DAO_ADDR));
 
-    let info_bin = query(deps.as_ref(), mock_env(), QueryMsg::Info {}).unwrap();
-    let info: InfoResponse = from_json(info_bin).unwrap();
-    assert_eq!(info.info.contract, "crates.io:dao-voting-juno-staked");
+    let info: InfoResponse =
+        from_json(query(deps.as_ref(), mock_env(), QueryMsg::Info {}).unwrap()).unwrap();
+    assert_eq!(info.info.contract, CONTRACT_NAME);
+    assert_eq!(info.info.version, CONTRACT_VERSION);
 }
 
 #[test]
-fn voting_power_proxies_to_chain_snapshot_with_at_or_before_semantics() {
+fn all_power_queries_proxy_explicit_and_current_heights() {
     let mut store = SnapshotStore::default();
-    // The chain wrote the voter's power at height 100; later heights
-    // without an explicit snapshot fall through to whatever the
-    // default for that voter is. Mirrors the chain's at-or-before
-    // iterator returning the latest entry <= requested height.
     store.set_power(VOTER_A, 100, 250_000_000);
-    store.set_default_power(VOTER_A, 250_000_000);
+    store.set_default_power(VOTER_A, 300_000_000);
     store.set_total(100, 1_000_000_000);
-    store.set_default_total(1_000_000_000);
+    store.set_default_total(1_200_000_000);
     let mut deps = juno_deps_with(store);
     instantiate_module(&mut deps);
 
     let mut env = mock_env();
     env.block.height = 250;
 
-    let bin = query(
-        deps.as_ref(),
-        env.clone(),
-        QueryMsg::VotingPowerAtHeight {
-            address: VOTER_A.to_string(),
-            height: Some(100),
-        },
+    let historical: VotingPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::VotingPowerAtHeight {
+                address: VOTER_A.to_string(),
+                height: Some(100),
+            },
+        )
+        .unwrap(),
     )
     .unwrap();
-    let resp: VotingPowerAtHeightResponse = from_json(bin).unwrap();
-    assert_eq!(resp.power, Uint128::new(250_000_000));
-    assert_eq!(resp.height, 100);
+    assert_eq!(historical.power, Uint128::new(250_000_000));
+    assert_eq!(historical.height, 100);
 
-    // No height → current env.block.height.
-    let bin = query(
-        deps.as_ref(),
-        env.clone(),
-        QueryMsg::VotingPowerAtHeight {
-            address: VOTER_A.to_string(),
-            height: None,
-        },
+    let current: VotingPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::VotingPowerAtHeight {
+                address: VOTER_A.to_string(),
+                height: None,
+            },
+        )
+        .unwrap(),
     )
     .unwrap();
-    let resp: VotingPowerAtHeightResponse = from_json(bin).unwrap();
-    assert_eq!(resp.power, Uint128::new(250_000_000));
-    assert_eq!(resp.height, 250);
+    assert_eq!(current.power, Uint128::new(300_000_000));
+    assert_eq!(current.height, 250);
 
-    let bin = query(
-        deps.as_ref(),
-        env,
-        QueryMsg::TotalPowerAtHeight { height: Some(100) },
+    let historical_total: TotalPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::TotalPowerAtHeight { height: Some(100) },
+        )
+        .unwrap(),
     )
     .unwrap();
-    let resp: TotalPowerAtHeightResponse = from_json(bin).unwrap();
-    assert_eq!(resp.power, Uint128::new(1_000_000_000));
+    assert_eq!(historical_total.power, Uint128::new(1_000_000_000));
+    assert_eq!(historical_total.height, 100);
+
+    let current_total: TotalPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            env,
+            QueryMsg::TotalPowerAtHeight { height: None },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(current_total.power, Uint128::new(1_200_000_000));
+    assert_eq!(current_total.height, 250);
 }
 
 #[test]
-fn add_and_remove_hook_only_dao() {
+fn malformed_overflow_and_out_of_range_chain_values_are_rejected() {
+    let mut malformed = SnapshotStore::default();
+    malformed.set_raw_power(VOTER_A, 7, "not-a-number");
+    let deps = juno_deps_with(malformed);
+    let err = query(
+        deps.as_ref(),
+        mock_env(),
+        QueryMsg::VotingPowerAtHeight {
+            address: VOTER_A.to_string(),
+            height: Some(7),
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("unparseable power"));
+
+    let mut overflow = SnapshotStore::default();
+    overflow.set_raw_total(7, "340282366920938463463374607431768211456");
+    let deps = juno_deps_with(overflow);
+    let err = query(
+        deps.as_ref(),
+        mock_env(),
+        QueryMsg::TotalPowerAtHeight { height: Some(7) },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("unparseable power"));
+
+    let deps = juno_deps_with(SnapshotStore::default());
+    let err = query(
+        deps.as_ref(),
+        mock_env(),
+        QueryMsg::TotalPowerAtHeight {
+            height: Some(i64::MAX as u64 + 1),
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("exceeds i64::MAX"));
+}
+
+#[test]
+fn execute_schema_has_no_supported_messages() {
+    assert!(from_json::<ExecuteMsg>(br#"{}"#).is_err());
+    assert!(from_json::<ExecuteMsg>(br#"{"add_hook":{"addr":"hook"}}"#).is_err());
+}
+
+#[test]
+fn migration_requires_an_older_matching_contract_and_updates_cw2() {
     let mut deps = juno_deps_with(SnapshotStore::default());
-    instantiate_module(&mut deps);
-
-    // Non-DAO sender is rejected.
-    let res = execute(
-        deps.as_mut(),
-        mock_env(),
-        mock_info("rando", &[]),
-        ExecuteMsg::AddHook {
-            addr: VOTER_A.to_string(),
-        },
+    set_contract_version(&mut deps.storage, CONTRACT_NAME, "2.7.0").unwrap();
+    let response = migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap();
+    assert_eq!(response.attributes[0].value, "migrate");
+    assert_eq!(
+        get_contract_version(&deps.storage).unwrap().version,
+        CONTRACT_VERSION
     );
-    assert!(matches!(res, Err(ContractError::Unauthorized {})));
 
-    // DAO adds two subscribers.
-    execute(
-        deps.as_mut(),
-        mock_env(),
-        mock_info(DAO_ADDR, &[]),
-        ExecuteMsg::AddHook {
-            addr: VOTER_A.to_string(),
-        },
-    )
-    .unwrap();
-    execute(
-        deps.as_mut(),
-        mock_env(),
-        mock_info(DAO_ADDR, &[]),
-        ExecuteMsg::AddHook {
-            addr: VOTER_B.to_string(),
-        },
-    )
-    .unwrap();
+    let mut mismatch = juno_deps_with(SnapshotStore::default());
+    set_contract_version(&mut mismatch.storage, "wrong-contract", "2.7.0").unwrap();
+    assert!(migrate(mismatch.as_mut(), mock_env(), MigrateMsg {}).is_err());
 
-    let bin = query(deps.as_ref(), mock_env(), QueryMsg::GetHooks {}).unwrap();
-    let resp: GetHooksResponse = from_json(bin).unwrap();
-    assert_eq!(resp.hooks.len(), 2);
-    assert!(resp.hooks.contains(&VOTER_A.to_string()));
-    assert!(resp.hooks.contains(&VOTER_B.to_string()));
+    let mut same = juno_deps_with(SnapshotStore::default());
+    set_contract_version(&mut same.storage, CONTRACT_NAME, CONTRACT_VERSION).unwrap();
+    assert!(migrate(same.as_mut(), mock_env(), MigrateMsg {}).is_err());
 
-    // Duplicate add fails.
-    let res = execute(
-        deps.as_mut(),
-        mock_env(),
-        mock_info(DAO_ADDR, &[]),
-        ExecuteMsg::AddHook {
-            addr: VOTER_A.to_string(),
-        },
-    );
-    assert!(matches!(res, Err(ContractError::HookError(_))));
-
-    // Remove works.
-    execute(
-        deps.as_mut(),
-        mock_env(),
-        mock_info(DAO_ADDR, &[]),
-        ExecuteMsg::RemoveHook {
-            addr: VOTER_A.to_string(),
-        },
-    )
-    .unwrap();
-    let bin = query(deps.as_ref(), mock_env(), QueryMsg::GetHooks {}).unwrap();
-    let resp: GetHooksResponse = from_json(bin).unwrap();
-    assert_eq!(resp.hooks, vec![VOTER_B.to_string()]);
+    let mut newer = juno_deps_with(SnapshotStore::default());
+    set_contract_version(&mut newer.storage, CONTRACT_NAME, "99.0.0").unwrap();
+    assert!(migrate(newer.as_mut(), mock_env(), MigrateMsg {}).is_err());
 }

@@ -76,23 +76,28 @@ pub trait JunoQuerier {
 
 impl<'a> JunoQuerier for QuerierWrapper<'a, JunoQuery> {
     fn voting_power_at(&self, address: String, height: u64) -> StdResult<Uint128> {
+        let height = query_height(height)?;
         let req: QueryRequest<JunoQuery> =
-            QueryRequest::Custom(JunoQuery::VotingPowerAt(VotingPowerAt {
-                address,
-                height: height as i64,
-            }));
+            QueryRequest::Custom(JunoQuery::VotingPowerAt(VotingPowerAt { address, height }));
         let resp: VotingPowerResponse = self.query(&req)?;
         parse_power(&resp.power)
     }
 
     fn total_voting_power_at(&self, height: u64) -> StdResult<Uint128> {
+        let height = query_height(height)?;
         let req: QueryRequest<JunoQuery> =
-            QueryRequest::Custom(JunoQuery::TotalVotingPowerAt(TotalVotingPowerAt {
-                height: height as i64,
-            }));
+            QueryRequest::Custom(JunoQuery::TotalVotingPowerAt(TotalVotingPowerAt { height }));
         let resp: VotingPowerResponse = self.query(&req)?;
         parse_power(&resp.power)
     }
+}
+
+fn query_height(height: u64) -> StdResult<i64> {
+    i64::try_from(height).map_err(|_| {
+        cosmwasm_std::StdError::generic_err(format!(
+            "voting-snapshot query height {height} exceeds i64::MAX"
+        ))
+    })
 }
 
 fn parse_power(raw: &str) -> StdResult<Uint128> {

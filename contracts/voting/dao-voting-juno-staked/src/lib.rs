@@ -10,3 +10,4 @@ pub mod state;
 mod tests;
 
 pub use crate::error::ContractError;
+pub use contract::{execute, instantiate, migrate, query};

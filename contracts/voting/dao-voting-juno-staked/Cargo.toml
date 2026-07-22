@@ -23,11 +23,9 @@ library = []
 [dependencies]
 cosmwasm-std = { workspace = true, features = ["cosmwasm_1_2", "stargate"] }
 cosmwasm-schema = { workspace = true }
-cw-hooks = { workspace = true }
 cw-storage-plus = { workspace = true }
 cw2 = { workspace = true }
 dao-dao-macros = { workspace = true }
-dao-hooks = { workspace = true }
 dao-interface = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

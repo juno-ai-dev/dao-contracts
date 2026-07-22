@@ -10,53 +10,55 @@ use crate::bindings::{JunoQuery, VotingPowerResponse};
 
 pub const DAO_ADDR: &str = "dao-core";
 pub const VOTER_A: &str = "voter-a";
-pub const VOTER_B: &str = "voter-b";
 
-/// Canned snapshot store keyed on `(address, height)`. A height of `None`
-/// in the lookup acts as a fallback for "any height not explicitly set",
-/// matching the at-or-before semantics of the real chain module.
 #[derive(Default, Clone)]
 pub struct SnapshotStore {
-    per_addr: HashMap<(String, u64), Uint128>,
-    addr_default: HashMap<String, Uint128>,
-    total_at: HashMap<u64, Uint128>,
-    total_default: Uint128,
+    per_addr: HashMap<(String, u64), String>,
+    addr_default: HashMap<String, String>,
+    total_at: HashMap<u64, String>,
+    total_default: String,
 }
 
 impl SnapshotStore {
     pub fn set_power(&mut self, addr: &str, height: u64, power: u128) {
+        self.set_raw_power(addr, height, &power.to_string());
+    }
+
+    pub fn set_raw_power(&mut self, addr: &str, height: u64, power: &str) {
         self.per_addr
-            .insert((addr.to_string(), height), Uint128::new(power));
+            .insert((addr.to_string(), height), power.to_string());
     }
 
     pub fn set_default_power(&mut self, addr: &str, power: u128) {
         self.addr_default
-            .insert(addr.to_string(), Uint128::new(power));
+            .insert(addr.to_string(), power.to_string());
     }
 
     pub fn set_total(&mut self, height: u64, power: u128) {
-        self.total_at.insert(height, Uint128::new(power));
+        self.total_at.insert(height, power.to_string());
+    }
+
+    pub fn set_raw_total(&mut self, height: u64, power: &str) {
+        self.total_at.insert(height, power.to_string());
     }
 
     pub fn set_default_total(&mut self, power: u128) {
-        self.total_default = Uint128::new(power);
+        self.total_default = power.to_string();
     }
 
-    fn lookup_addr(&self, addr: &str, height: u64) -> Uint128 {
-        if let Some(p) = self.per_addr.get(&(addr.to_string(), height)) {
-            return *p;
-        }
-        self.addr_default
-            .get(addr)
-            .copied()
-            .unwrap_or(Uint128::zero())
+    fn lookup_addr(&self, addr: &str, height: u64) -> String {
+        self.per_addr
+            .get(&(addr.to_string(), height))
+            .or_else(|| self.addr_default.get(addr))
+            .cloned()
+            .unwrap_or_else(|| Uint128::zero().to_string())
     }
 
-    fn lookup_total(&self, height: u64) -> Uint128 {
+    fn lookup_total(&self, height: u64) -> String {
         self.total_at
             .get(&height)
-            .copied()
-            .unwrap_or(self.total_default)
+            .cloned()
+            .unwrap_or_else(|| self.total_default.clone())
     }
 }
 
@@ -67,10 +69,8 @@ pub struct JunoMockQuerier {
 
 impl JunoMockQuerier {
     pub fn new(store: SnapshotStore) -> Self {
-        Self {
-            base: MockQuerier::new(&[]),
-            store,
-        }
+        let base = MockQuerier::new(&[]);
+        Self { base, store }
     }
 }
 
@@ -95,17 +95,12 @@ impl Querier for JunoMockQuerier {
 }
 
 impl JunoMockQuerier {
-    fn handle_custom(&self, q: JunoQuery, raw: &[u8]) -> QuerierResult {
-        let resp = match q {
-            JunoQuery::VotingPowerAt(p) => VotingPowerResponse {
-                power: self
-                    .store
-                    .lookup_addr(&p.address, p.height as u64)
-                    .to_string(),
-            },
-            JunoQuery::TotalVotingPowerAt(p) => VotingPowerResponse {
-                power: self.store.lookup_total(p.height as u64).to_string(),
-            },
+    fn handle_custom(&self, query: JunoQuery, raw: &[u8]) -> QuerierResult {
+        let power = match query {
+            JunoQuery::VotingPowerAt(params) => self
+                .store
+                .lookup_addr(&params.address, params.height as u64),
+            JunoQuery::TotalVotingPowerAt(params) => self.store.lookup_total(params.height as u64),
             JunoQuery::VotingPowerOverRange(_) => {
                 return SystemResult::Err(SystemError::InvalidRequest {
                     error: "VotingPowerOverRange not stubbed in tests".to_string(),
@@ -113,7 +108,9 @@ impl JunoMockQuerier {
                 })
             }
         };
-        SystemResult::Ok(ContractResult::Ok(to_json_binary(&resp).unwrap()))
+        SystemResult::Ok(ContractResult::Ok(
+            to_json_binary(&VotingPowerResponse { power }).unwrap(),
+        ))
     }
 }
 
