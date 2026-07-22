@@ -139,6 +139,39 @@ fn all_power_queries_use_beginning_of_block_snapshots() {
 }
 
 #[test]
+fn sparse_snapshots_carry_forward_at_or_before_the_requested_height() {
+    let mut store = SnapshotStore::default();
+    store.set_power(VOTER_A, 99, 250_000_000);
+    store.set_total(99, 1_000_000_000);
+    let deps = juno_deps_with(store);
+
+    let voter: VotingPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::VotingPowerAtHeight {
+                address: VOTER_A.to_string(),
+                height: Some(150),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let total: TotalPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::TotalPowerAtHeight { height: Some(150) },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(voter.power, Uint128::new(250_000_000));
+    assert_eq!(total.power, Uint128::new(1_000_000_000));
+}
+
+#[test]
 fn genesis_boundary_does_not_underflow() {
     let mut store = SnapshotStore::default();
     store.set_power(VOTER_A, 0, 7);
@@ -200,12 +233,28 @@ fn malformed_overflow_and_out_of_range_chain_values_are_rejected() {
     .unwrap_err();
     assert!(err.to_string().contains("unparseable power"));
 
+    let mut boundary = SnapshotStore::default();
+    boundary.set_total(i64::MAX as u64, 42);
+    let deps = juno_deps_with(boundary);
+    let response: TotalPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::TotalPowerAtHeight {
+                height: Some(i64::MAX as u64 + 1),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response.power, Uint128::new(42));
+
     let deps = juno_deps_with(SnapshotStore::default());
     let err = query(
         deps.as_ref(),
         mock_env(),
         QueryMsg::TotalPowerAtHeight {
-            height: Some(i64::MAX as u64 + 1),
+            height: Some(i64::MAX as u64 + 2),
         },
     )
     .unwrap_err();

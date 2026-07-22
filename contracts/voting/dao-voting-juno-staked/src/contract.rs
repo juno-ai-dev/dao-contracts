@@ -87,12 +87,14 @@ fn query_total_power_at_height(
 /// equivalent chain snapshot is `h - 1`. Height zero is retained as zero for
 /// defensive genesis-boundary queries.
 fn snapshot_height(dao_height: u64) -> StdResult<u64> {
-    i64::try_from(dao_height).map_err(|_| {
+    let snapshot_height = dao_height.saturating_sub(1);
+    i64::try_from(snapshot_height).map_err(|_| {
         cosmwasm_std::StdError::generic_err(format!(
-            "DAO query height {dao_height} exceeds i64::MAX"
+            "DAO query height {dao_height} translates to snapshot height \
+             {snapshot_height}, which exceeds i64::MAX"
         ))
     })?;
-    Ok(dao_height.saturating_sub(1))
+    Ok(snapshot_height)
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]

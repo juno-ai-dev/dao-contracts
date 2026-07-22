@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cosmwasm_std::testing::{MockApi, MockQuerier, MockStorage};
 use cosmwasm_std::{
@@ -13,8 +13,8 @@ pub const VOTER_A: &str = "voter-a";
 
 #[derive(Default, Clone)]
 pub struct SnapshotStore {
-    per_addr: HashMap<(String, u64), String>,
-    total_at: HashMap<u64, String>,
+    per_addr: HashMap<String, BTreeMap<u64, String>>,
+    total_at: BTreeMap<u64, String>,
 }
 
 impl SnapshotStore {
@@ -24,7 +24,9 @@ impl SnapshotStore {
 
     pub fn set_raw_power(&mut self, addr: &str, height: u64, power: &str) {
         self.per_addr
-            .insert((addr.to_string(), height), power.to_string());
+            .entry(addr.to_string())
+            .or_default()
+            .insert(height, power.to_string());
     }
 
     pub fn set_total(&mut self, height: u64, power: u128) {
@@ -37,15 +39,17 @@ impl SnapshotStore {
 
     fn lookup_addr(&self, addr: &str, height: u64) -> String {
         self.per_addr
-            .get(&(addr.to_string(), height))
-            .cloned()
+            .get(addr)
+            .and_then(|snapshots| snapshots.range(..=height).next_back())
+            .map(|(_, power)| power.clone())
             .unwrap_or_else(|| Uint128::zero().to_string())
     }
 
     fn lookup_total(&self, height: u64) -> String {
         self.total_at
-            .get(&height)
-            .cloned()
+            .range(..=height)
+            .next_back()
+            .map(|(_, power)| power.clone())
             .unwrap_or_else(|| Uint128::zero().to_string())
     }
 }

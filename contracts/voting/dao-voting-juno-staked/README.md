@@ -19,11 +19,42 @@ The chain owns voting-power policy and storage:
 - Omitting `height` uses the beginning of the current block (the previous
   settled Juno snapshot).
 - Liquid-staking exclusion applies only to addresses in Juno's
-  governance-managed LST allowlist. Operators must verify the live allowlist;
-  v30 does not generically detect liquid-staking contracts.
+  governance-managed LST allowlist. Juno v30 defaults this allowlist to empty,
+  so no address is excluded until governance configures it. Operators must
+  verify the live parameter; v30 does not generically detect liquid-staking
+  contracts.
+- Juno v30 defaults snapshot retention to `0` (pruning disabled). Governance can
+  change both retention and the LST allowlist after deployment, so neither
+  default should be assumed from the binary alone.
 
 These historical semantics let DAO DAO proposal modules use power fixed at a
 proposal's snapshot height, rather than recomputing from current stake.
+
+## Activation and migration boundaries
+
+Juno seeds its first voting snapshots at the v30 upgrade/backfill height `U`.
+Because DAO height `h` reads Juno snapshot `h - 1`, the first DAO height backed
+by that seed is `U + 1`; queries at `h <= U` can return zero. Before activating
+this voting module:
+
+1. confirm the v30 upgrade/backfill block has committed;
+2. wait until at least `U + 1`;
+3. query `/juno/votingsnapshot/v1/params` and record the live LST allowlist and
+   retention window; and
+4. do not switch an existing DAO while proposals needing pre-activation voting
+   history remain open.
+
+An exported-genesis restart similarly does not preserve earlier snapshot
+history. Treat the restart seed height as a new activation boundary and do not
+carry open proposals that require pre-restart power through such a switch.
+
+This artifact is **fresh-deployment-only with respect to the unreleased
+hook-enabled PR builds**. Those builds used the same `2.8.0-alpha.2` CW2 version
+while exposing different state and wire behavior, so the normal migration guard
+cannot identify them as older releases. Do not migrate an instance created from
+those commits; instantiate this module fresh. The migrate entry point is
+reserved for explicitly versioned, state-compatible future releases with the
+same CW2 contract identity.
 
 ## Deploy and instantiate
 
@@ -43,8 +74,10 @@ no user execute operations. Its standard DAO DAO query surface is:
 - `Dao` (the DAO core that instantiated this voting module)
 - `Info`
 
-The contract has not been claimed as deployed or chain-tested by this
-repository documentation.
+The release-candidate workflow has been exercised on Juno v30 `uni-7`: store,
+instantiate, all four DAO DAO queries, and voter/total-power behavior across a
+real staking change and EndBlock boundary. Release operators must still bind
+that smoke evidence to the exact artifact checksum they intend to deploy.
 
 ## Why staking-delta hooks are not exposed
 
@@ -67,7 +100,8 @@ and must not expect lossless per-delegator callbacks from this module.
 - Current queries deliberately use the previous settled Juno snapshot so DAO
   height semantics remain beginning-of-block and stable throughout the block.
 - Voting-snapshot retention must exceed the maximum proposal lifetime plus an
-  operational margin. If governance enables shorter pruning, old snapshots can
-  become unavailable and at-or-before queries can return zero.
+  operational margin. Juno v30 defaults retention to `0` (no pruning), but
+  governance can enable a finite window. Pruning retains a carry-forward anchor;
+  queries older than that retained anchor can still return zero.
 - The `Dao` query returns the instantiating address recorded at setup; changing
   the wasm admin does not change which DAO the voting module belongs to.
