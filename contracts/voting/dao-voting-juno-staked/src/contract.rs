@@ -63,7 +63,10 @@ fn query_voting_power_at_height(
     height: Option<u64>,
 ) -> StdResult<VotingPowerAtHeightResponse> {
     let height = height.unwrap_or(env.block.height);
-    let power = deps.querier.voting_power_at(address, height)?;
+    let address = deps.api.addr_validate(&address)?;
+    let power = deps
+        .querier
+        .voting_power_at(address.to_string(), snapshot_height(height)?)?;
     Ok(VotingPowerAtHeightResponse { power, height })
 }
 
@@ -73,8 +76,23 @@ fn query_total_power_at_height(
     height: Option<u64>,
 ) -> StdResult<TotalPowerAtHeightResponse> {
     let height = height.unwrap_or(env.block.height);
-    let power = deps.querier.total_voting_power_at(height)?;
+    let power = deps
+        .querier
+        .total_voting_power_at(snapshot_height(height)?)?;
     Ok(TotalPowerAtHeightResponse { power, height })
+}
+
+/// DAO DAO fixes proposal power at the beginning of proposal block `h`.
+/// Juno records settled staking state at the end of each block, so the
+/// equivalent chain snapshot is `h - 1`. Height zero is retained as zero for
+/// defensive genesis-boundary queries.
+fn snapshot_height(dao_height: u64) -> StdResult<u64> {
+    i64::try_from(dao_height).map_err(|_| {
+        cosmwasm_std::StdError::generic_err(format!(
+            "DAO query height {dao_height} exceeds i64::MAX"
+        ))
+    })?;
+    Ok(dao_height.saturating_sub(1))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]

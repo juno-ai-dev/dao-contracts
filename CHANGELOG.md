@@ -53,10 +53,12 @@ add the release or comparison link.
 
 - Added `dao-voting-juno-staked`, a thin DAO DAO voting module backed by
   Juno's historical `x/voting-snapshot` queries. It requires Juno v30 (including
-  the `uni-7` deployment target); liquid-staking-token exclusion remains
-  chain-owned. Synchronous staking-delta hooks are intentionally not exposed
-  because snapshots settle in EndBlock and validator-wide changes cannot be
-  translated losslessly into per-delegator callbacks.
+  the `uni-7` deployment target), translates DAO heights to the previous settled
+  Juno snapshot for consistent beginning-of-block proposal power, and leaves
+  liquid-staking-token exclusion chain-owned. Synchronous staking-delta hooks
+  are intentionally not exposed because snapshots settle in EndBlock and
+  validator-wide changes cannot be translated losslessly into per-delegator
+  callbacks.
 - Added the gauge orchestrator, gauge adapter, budget allocator, shared gauge
   interface, release scripts, operational documentation, schemas, and
   production-readiness checks.

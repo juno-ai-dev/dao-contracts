@@ -11,15 +11,16 @@ releases without `x/voting-snapshot` cannot answer its queries.
 
 The chain owns voting-power policy and storage:
 
-- `VotingPowerAtHeight` reads the latest delegator snapshot recorded at or
-  before the requested height.
-- `TotalPowerAtHeight` reads total eligible bonded power at or before the
-  requested height.
-- Omitting `height` asks at the current block height. Because snapshots are
-  persisted in EndBlock, a query made earlier in that same block can still
-  observe the previous settled snapshot.
-- Liquid-staked-token exclusion is enforced by Juno's module configuration,
-  not by this contract. Operators must verify the chain's LST configuration.
+- DAO DAO treats height `h` as beginning-of-block voting power. Juno persists
+  settled staking snapshots in EndBlock, so both voting-power queries translate
+  DAO height `h` to Juno snapshot height `h - 1` and return the requested DAO
+  height in the response. This keeps proposal totals and later voter queries on
+  one immutable basis even when staking changes later in the proposal block.
+- Omitting `height` uses the beginning of the current block (the previous
+  settled Juno snapshot).
+- Liquid-staking exclusion applies only to addresses in Juno's
+  governance-managed LST allowlist. Operators must verify the live allowlist;
+  v30 does not generically detect liquid-staking contracts.
 
 These historical semantics let DAO DAO proposal modules use power fixed at a
 proposal's snapshot height, rather than recomputing from current stake.
@@ -63,7 +64,10 @@ and must not expect lossless per-delegator callbacks from this module.
 ## Limitations
 
 - The module is usable only where Juno's v30 custom wasm query API is present.
-- Current-block reads are subject to EndBlock settlement; historical reads of a
-  settled height are the stable interface for proposal voting.
+- Current queries deliberately use the previous settled Juno snapshot so DAO
+  height semantics remain beginning-of-block and stable throughout the block.
+- Voting-snapshot retention must exceed the maximum proposal lifetime plus an
+  operational margin. If governance enables shorter pruning, old snapshots can
+  become unavailable and at-or-before queries can return zero.
 - The `Dao` query returns the instantiating address recorded at setup; changing
   the wasm admin does not change which DAO the voting module belongs to.

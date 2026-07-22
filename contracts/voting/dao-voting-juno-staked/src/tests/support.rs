@@ -14,9 +14,7 @@ pub const VOTER_A: &str = "voter-a";
 #[derive(Default, Clone)]
 pub struct SnapshotStore {
     per_addr: HashMap<(String, u64), String>,
-    addr_default: HashMap<String, String>,
     total_at: HashMap<u64, String>,
-    total_default: String,
 }
 
 impl SnapshotStore {
@@ -29,11 +27,6 @@ impl SnapshotStore {
             .insert((addr.to_string(), height), power.to_string());
     }
 
-    pub fn set_default_power(&mut self, addr: &str, power: u128) {
-        self.addr_default
-            .insert(addr.to_string(), power.to_string());
-    }
-
     pub fn set_total(&mut self, height: u64, power: u128) {
         self.total_at.insert(height, power.to_string());
     }
@@ -42,14 +35,9 @@ impl SnapshotStore {
         self.total_at.insert(height, power.to_string());
     }
 
-    pub fn set_default_total(&mut self, power: u128) {
-        self.total_default = power.to_string();
-    }
-
     fn lookup_addr(&self, addr: &str, height: u64) -> String {
         self.per_addr
             .get(&(addr.to_string(), height))
-            .or_else(|| self.addr_default.get(addr))
             .cloned()
             .unwrap_or_else(|| Uint128::zero().to_string())
     }
@@ -58,7 +46,7 @@ impl SnapshotStore {
         self.total_at
             .get(&height)
             .cloned()
-            .unwrap_or_else(|| self.total_default.clone())
+            .unwrap_or_else(|| Uint128::zero().to_string())
     }
 }
 

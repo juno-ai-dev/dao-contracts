@@ -51,12 +51,12 @@ fn instantiate_sets_version_and_queries_instantiating_dao_and_info() {
 }
 
 #[test]
-fn all_power_queries_proxy_explicit_and_current_heights() {
+fn all_power_queries_use_beginning_of_block_snapshots() {
     let mut store = SnapshotStore::default();
-    store.set_power(VOTER_A, 100, 250_000_000);
-    store.set_default_power(VOTER_A, 300_000_000);
-    store.set_total(100, 1_000_000_000);
-    store.set_default_total(1_200_000_000);
+    store.set_power(VOTER_A, 99, 250_000_000);
+    store.set_power(VOTER_A, 249, 300_000_000);
+    store.set_total(99, 1_000_000_000);
+    store.set_total(249, 1_200_000_000);
     let mut deps = juno_deps_with(store);
     instantiate_module(&mut deps);
 
@@ -119,9 +119,44 @@ fn all_power_queries_proxy_explicit_and_current_heights() {
 }
 
 #[test]
+fn genesis_boundary_does_not_underflow() {
+    let mut store = SnapshotStore::default();
+    store.set_power(VOTER_A, 0, 7);
+    store.set_total(0, 11);
+    let deps = juno_deps_with(store);
+
+    let voter: VotingPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::VotingPowerAtHeight {
+                address: VOTER_A.to_string(),
+                height: Some(0),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let total: TotalPowerAtHeightResponse = from_json(
+        query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::TotalPowerAtHeight { height: Some(0) },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(voter.power, Uint128::new(7));
+    assert_eq!(voter.height, 0);
+    assert_eq!(total.power, Uint128::new(11));
+    assert_eq!(total.height, 0);
+}
+
+#[test]
 fn malformed_overflow_and_out_of_range_chain_values_are_rejected() {
     let mut malformed = SnapshotStore::default();
-    malformed.set_raw_power(VOTER_A, 7, "not-a-number");
+    malformed.set_raw_power(VOTER_A, 6, "not-a-number");
     let deps = juno_deps_with(malformed);
     let err = query(
         deps.as_ref(),
@@ -135,7 +170,7 @@ fn malformed_overflow_and_out_of_range_chain_values_are_rejected() {
     assert!(err.to_string().contains("unparseable power"));
 
     let mut overflow = SnapshotStore::default();
-    overflow.set_raw_total(7, "340282366920938463463374607431768211456");
+    overflow.set_raw_total(6, "340282366920938463463374607431768211456");
     let deps = juno_deps_with(overflow);
     let err = query(
         deps.as_ref(),
