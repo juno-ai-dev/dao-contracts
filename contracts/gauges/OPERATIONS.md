@@ -30,6 +30,25 @@ Alert when `next_epoch` remains overdue beyond the keeper retry window. Do not
 blindly retry an adapter error that deterministically returns an invalid or
 underfunded message.
 
+For epoch-snapshot gauges, first call permissionless `OpenEpoch { gauge }` only
+after confirming the Program Vault holds at least the complete configured
+budget. The contract enforces the same gate. Record the returned snapshot
+height, policy version, close, deadline, budget, denomination, and retained
+option. A rejected open must leave the current epoch, counter, and schedule
+unchanged.
+
+From `closes_at` until (but not including) `execution_deadline`, call
+`Execute { gauge }`. Reconcile `allocated_power <= participating_power`, the
+retained-option and unallocated signals, selected project power, and
+`emitted_value + retained_value == epoch_budget`. The Vault needs only emitted
+value at this point. `insufficient_funds` is terminal; do not top up and retry
+the stale ballot. At or after the deadline anyone calls
+`ExpireEpoch { gauge }`. For a deterministic adapter or migration failure the
+owner may call `AbortEpoch { gauge, reason }`; retain the reason and incident
+evidence. The guardian cannot abort or resume. After any terminal outcome,
+verify that a second execute/expire/abort fails and the next epoch can open
+exactly once.
+
 ## Health monitoring and reconciliation
 
 Query `GaugeHealth { gauge }` after deployment, migration, reset completion,

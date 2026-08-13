@@ -1,6 +1,6 @@
 {
   "contract_name": "gauge-orchestrator",
-  "contract_version": "2.8.0-alpha.2",
+  "contract_version": "2.8.0-alpha.3",
   "idl_version": "1.0.0",
   "instantiate": {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -70,6 +70,7 @@
         "required": [
           "denom",
           "epoch_budget",
+          "execution_window_seconds",
           "min_turnout_bps"
         ],
         "properties": {
@@ -79,10 +80,23 @@
           "epoch_budget": {
             "$ref": "#/definitions/Uint128"
           },
+          "execution_window_seconds": {
+            "description": "Bounded interval after voting closes during which execution may occur.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
           "min_turnout_bps": {
             "type": "integer",
             "format": "uint16",
             "minimum": 0.0
+          },
+          "retained_option": {
+            "description": "Optional non-project sink. It counts as an affirmative ballot signal but is excluded from project selection and adapter execution.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false
@@ -347,6 +361,58 @@
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0.0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "description": "Publicly terminalizes an unexecuted epoch at or after its deadline.",
+        "type": "object",
+        "required": [
+          "expire_epoch"
+        ],
+        "properties": {
+          "expire_epoch": {
+            "type": "object",
+            "required": [
+              "gauge"
+            ],
+            "properties": {
+              "gauge": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "description": "Owner-only terminal recovery for an unrecoverable adapter or migration failure. The reason is persisted in the terminal outcome.",
+        "type": "object",
+        "required": [
+          "abort_epoch"
+        ],
+        "properties": {
+          "abort_epoch": {
+            "type": "object",
+            "required": [
+              "gauge",
+              "reason"
+            ],
+            "properties": {
+              "gauge": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0.0
+              },
+              "reason": {
+                "type": "string"
               }
             },
             "additionalProperties": false
@@ -622,6 +688,7 @@
         "required": [
           "denom",
           "epoch_budget",
+          "execution_window_seconds",
           "min_turnout_bps"
         ],
         "properties": {
@@ -631,10 +698,23 @@
           "epoch_budget": {
             "$ref": "#/definitions/Uint128"
           },
+          "execution_window_seconds": {
+            "description": "Bounded interval after voting closes during which execution may occur.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
           "min_turnout_bps": {
             "type": "integer",
             "format": "uint16",
             "minimum": 0.0
+          },
+          "retained_option": {
+            "description": "Optional non-project sink. It counts as an affirmative ballot signal but is excluded from project selection and adapter execution.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false
@@ -1524,23 +1604,39 @@
       "title": "EpochResponse",
       "type": "object",
       "required": [
+        "allocated_power",
         "cleanup",
         "closes_at",
         "denom",
+        "emitted_value",
         "epoch_budget",
         "epoch_id",
+        "execution_deadline",
         "gauge_id",
         "min_turnout_bps",
         "opens_at",
         "option_count",
         "outcome",
         "participating_power",
+        "policy_version",
+        "retained_option_power",
+        "retained_value",
+        "selected_project_power",
         "snapshot_height",
         "snapshot_total_power",
         "total_cast",
+        "unallocated_power",
         "voter_count"
       ],
       "properties": {
+        "allocated_power": {
+          "description": "Raw per-option allocation sum, including the retained option. Kept in addition to the historical `total_cast` name for a loud v2 interface.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
         "cleanup": {
           "$ref": "#/definitions/CleanupProgress"
         },
@@ -1552,10 +1648,18 @@
         "denom": {
           "type": "string"
         },
+        "emitted_value": {
+          "$ref": "#/definitions/Uint128"
+        },
         "epoch_budget": {
           "$ref": "#/definitions/Uint128"
         },
         "epoch_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execution_deadline": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
@@ -1586,6 +1690,26 @@
         "participating_power": {
           "$ref": "#/definitions/Uint128"
         },
+        "policy_version": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "retained_option": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retained_option_power": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "retained_value": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "selected_project_power": {
+          "$ref": "#/definitions/Uint128"
+        },
         "snapshot_height": {
           "type": "integer",
           "format": "uint64",
@@ -1595,6 +1719,9 @@
           "$ref": "#/definitions/Uint128"
         },
         "total_cast": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "unallocated_power": {
           "$ref": "#/definitions/Uint128"
         },
         "voter_count": {
@@ -1642,7 +1769,9 @@
               "enum": [
                 "open",
                 "no_distribution_turnout",
-                "no_eligible_options"
+                "no_distribution_zero_participation",
+                "no_eligible_options",
+                "expired"
               ]
             },
             {
@@ -1661,6 +1790,52 @@
                       "type": "integer",
                       "format": "uint32",
                       "minimum": 0.0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "insufficient_funds"
+              ],
+              "properties": {
+                "insufficient_funds": {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "required"
+                  ],
+                  "properties": {
+                    "available": {
+                      "$ref": "#/definitions/Uint128"
+                    },
+                    "required": {
+                      "$ref": "#/definitions/Uint128"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "aborted"
+              ],
+              "properties": {
+                "aborted": {
+                  "type": "object",
+                  "required": [
+                    "reason"
+                  ],
+                  "properties": {
+                    "reason": {
+                      "type": "string"
                     }
                   },
                   "additionalProperties": false
@@ -1919,6 +2094,7 @@
           "required": [
             "denom",
             "epoch_budget",
+            "execution_window_seconds",
             "min_turnout_bps"
           ],
           "properties": {
@@ -1928,10 +2104,23 @@
             "epoch_budget": {
               "$ref": "#/definitions/Uint128"
             },
+            "execution_window_seconds": {
+              "description": "Bounded interval after voting closes during which execution may occur.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
             "min_turnout_bps": {
               "type": "integer",
               "format": "uint16",
               "minimum": 0.0
+            },
+            "retained_option": {
+              "description": "Optional non-project sink. It counts as an affirmative ballot signal but is excluded from project selection and adapter execution.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "additionalProperties": false
@@ -2300,7 +2489,9 @@
               "enum": [
                 "open",
                 "no_distribution_turnout",
-                "no_eligible_options"
+                "no_distribution_zero_participation",
+                "no_eligible_options",
+                "expired"
               ]
             },
             {
@@ -2325,29 +2516,91 @@
                 }
               },
               "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "insufficient_funds"
+              ],
+              "properties": {
+                "insufficient_funds": {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "required"
+                  ],
+                  "properties": {
+                    "available": {
+                      "$ref": "#/definitions/Uint128"
+                    },
+                    "required": {
+                      "$ref": "#/definitions/Uint128"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "aborted"
+              ],
+              "properties": {
+                "aborted": {
+                  "type": "object",
+                  "required": [
+                    "reason"
+                  ],
+                  "properties": {
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           ]
         },
         "EpochResponse": {
           "type": "object",
           "required": [
+            "allocated_power",
             "cleanup",
             "closes_at",
             "denom",
+            "emitted_value",
             "epoch_budget",
             "epoch_id",
+            "execution_deadline",
             "gauge_id",
             "min_turnout_bps",
             "opens_at",
             "option_count",
             "outcome",
             "participating_power",
+            "policy_version",
+            "retained_option_power",
+            "retained_value",
+            "selected_project_power",
             "snapshot_height",
             "snapshot_total_power",
             "total_cast",
+            "unallocated_power",
             "voter_count"
           ],
           "properties": {
+            "allocated_power": {
+              "description": "Raw per-option allocation sum, including the retained option. Kept in addition to the historical `total_cast` name for a loud v2 interface.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/Uint128"
+                }
+              ]
+            },
             "cleanup": {
               "$ref": "#/definitions/CleanupProgress"
             },
@@ -2359,10 +2612,18 @@
             "denom": {
               "type": "string"
             },
+            "emitted_value": {
+              "$ref": "#/definitions/Uint128"
+            },
             "epoch_budget": {
               "$ref": "#/definitions/Uint128"
             },
             "epoch_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "execution_deadline": {
               "type": "integer",
               "format": "uint64",
               "minimum": 0.0
@@ -2393,6 +2654,26 @@
             "participating_power": {
               "$ref": "#/definitions/Uint128"
             },
+            "policy_version": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "retained_option": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retained_option_power": {
+              "$ref": "#/definitions/Uint128"
+            },
+            "retained_value": {
+              "$ref": "#/definitions/Uint128"
+            },
+            "selected_project_power": {
+              "$ref": "#/definitions/Uint128"
+            },
             "snapshot_height": {
               "type": "integer",
               "format": "uint64",
@@ -2402,6 +2683,9 @@
               "$ref": "#/definitions/Uint128"
             },
             "total_cast": {
+              "$ref": "#/definitions/Uint128"
+            },
+            "unallocated_power": {
               "$ref": "#/definitions/Uint128"
             },
             "voter_count": {
@@ -2445,6 +2729,7 @@
           "required": [
             "denom",
             "epoch_budget",
+            "execution_window_seconds",
             "min_turnout_bps"
           ],
           "properties": {
@@ -2454,10 +2739,23 @@
             "epoch_budget": {
               "$ref": "#/definitions/Uint128"
             },
+            "execution_window_seconds": {
+              "description": "Bounded interval after voting closes during which execution may occur.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
             "min_turnout_bps": {
               "type": "integer",
               "format": "uint16",
               "minimum": 0.0
+            },
+            "retained_option": {
+              "description": "Optional non-project sink. It counts as an affirmative ballot signal but is excluded from project selection and adapter execution.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "additionalProperties": false

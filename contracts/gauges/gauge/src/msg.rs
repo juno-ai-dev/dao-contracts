@@ -60,6 +60,11 @@ pub struct EpochSnapshotPolicy {
     pub min_turnout_bps: u16,
     pub epoch_budget: Uint128,
     pub denom: String,
+    /// Optional non-project sink. It counts as an affirmative ballot signal
+    /// but is excluded from project selection and adapter execution.
+    pub retained_option: Option<String>,
+    /// Bounded interval after voting closes during which execution may occur.
+    pub execution_window_seconds: u64,
 }
 
 #[cw_serde]
@@ -96,6 +101,11 @@ pub enum ExecuteMsg {
     ResumeGauge { gauge: u64 },
     /// Publicly opens the next epoch at one historical power height.
     OpenEpoch { gauge: u64 },
+    /// Publicly terminalizes an unexecuted epoch at or after its deadline.
+    ExpireEpoch { gauge: u64 },
+    /// Owner-only terminal recovery for an unrecoverable adapter or migration
+    /// failure. The reason is persisted in the terminal outcome.
+    AbortEpoch { gauge: u64, reason: String },
     /// Owner-only future-epoch policy update.
     UpdateSnapshotPolicy {
         gauge: u64,
@@ -256,9 +266,20 @@ pub struct GaugeResponse {
 #[cw_serde]
 pub enum EpochOutcome {
     Open,
-    Distributed { message_count: u32 },
+    Distributed {
+        message_count: u32,
+    },
     NoDistributionTurnout,
+    NoDistributionZeroParticipation,
     NoEligibleOptions,
+    InsufficientFunds {
+        required: Uint128,
+        available: Uint128,
+    },
+    Expired,
+    Aborted {
+        reason: String,
+    },
 }
 
 #[cw_serde]
@@ -282,12 +303,23 @@ pub struct EpochResponse {
     pub snapshot_height: u64,
     pub snapshot_total_power: Uint128,
     pub participating_power: Uint128,
+    /// Raw per-option allocation sum, including the retained option. Kept in
+    /// addition to the historical `total_cast` name for a loud v2 interface.
+    pub allocated_power: Uint128,
     pub total_cast: Uint128,
+    pub retained_option: Option<String>,
+    pub retained_option_power: Uint128,
+    pub unallocated_power: Uint128,
+    pub selected_project_power: Uint128,
+    pub emitted_value: Uint128,
+    pub retained_value: Uint128,
     pub min_turnout_bps: u16,
+    pub policy_version: u64,
     pub epoch_budget: Uint128,
     pub denom: String,
     pub opens_at: u64,
     pub closes_at: u64,
+    pub execution_deadline: u64,
     pub voter_count: u32,
     pub option_count: u32,
     pub outcome: EpochOutcome,

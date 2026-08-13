@@ -18,6 +18,12 @@ configuration must receive the same review as a treasury-spending proposal.
 The orchestrator does not constrain message types, recipients, denoms, or
 amounts.
 
+Epoch-snapshot mode intentionally differs from hook mode. It disables power
+hooks, fixes one historical power height per explicitly opened epoch, and
+requires the configured DAO core (the Program Vault) to hold the full fixed
+budget before opening. The snapshot policy is versioned and copied into the
+epoch, including its optional retained option and bounded execution window.
+
 ## Accounting invariants
 
 For each gauge and option, `TALLY` equals the sum of current, unexpired voter
@@ -39,6 +45,21 @@ until bounded reset cleanup; a zero tally alone does not prove that no stored
 vote still references the option.
 Candidate selection also pull-checks adapter validity, so adapter-side removal
 cannot remain payable solely because orchestrator state is stale.
+
+In epoch-snapshot mode, `participating_power` is the full snapshot power of
+each voter with a nonempty ballot. `total_cast`/`allocated_power` is only the
+sum of the ballot's integer option allocations. The contract maintains:
+
+```text
+allocated_power <= participating_power <= snapshot_total_power
+```
+
+Turnout, selection thresholds, per-project caps, and adapter shares all use
+`participating_power`; partial ballots are never normalized by their allocated
+subset. A configured retained option is tallied and reported but removed
+before validity checks, project top-N selection, caps, and adapter execution.
+Its power, unallocated ballot power, invalid/threshold-excluded allocations,
+cap overflow, and dust remain unspent.
 
 ## Hook liveness and failure domains
 
@@ -87,10 +108,11 @@ liabilities and must not be used to justify paying a record twice.
 
 ## Economic and chain risks
 
-There is no turnout quorum. Percentages use participating cast power, so one
-small voter can direct the full available epoch allocation. Integer
-multiplication floors dust. DAO budgets, adapter caps, and governance policy
-must account for low-turnout capture and rounding.
+Hook mode has no turnout quorum and retains its historical cast-power
+denominator. Epoch-snapshot mode has an explicit turnout policy and preserves
+unallocated participant power in its denominator. Integer multiplication
+floors dust. DAO budgets, adapter caps, and governance policy must still
+account for low-turnout capture and rounding.
 
 Addresses are validated by the active chain API before they become bank-send
 destinations. Native denoms and cw20 addresses are chain-specific. A schema or
@@ -105,6 +127,15 @@ because each transaction observes committed state, but failed DAO messages
 leave the epoch transaction uncommitted. Keepers need alerts for overdue
 epochs, reset/refund cursors without progress, escrow shortfall, and repeated
 adapter execution failure.
+
+An epoch-snapshot execution is allowed only from voting close until its fixed
+deadline. The adapter reports emitted and retained value; the orchestrator
+requires their sum to equal the epoch budget and compares the current Vault
+balance only with emitted value. A shortfall terminalizes the ballot as
+`INSUFFICIENT_FUNDS`, preventing a later top-up from activating it. Anyone may
+terminalize at the deadline as `EXPIRED`, and only the owner may use a
+reasoned `ABORTED` recovery. The snapshot guardian remains stop-only. Every
+terminal outcome advances scheduling once and can never be executed again.
 
 ## Migration boundary
 

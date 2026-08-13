@@ -11,6 +11,27 @@ optimized-artifact chain exercise, and public-testnet evidence below do not yet
 cover that extension. Nothing in this document should be read as production
 approval for the new mode until those gates are recorded.
 
+Update (2026-08-12): the Juno Voice v1 review identified snapshot-allocation
+renormalization and epoch-liveness defects in that extension. The current
+candidate adds the participating-power denominator, explicit retained-option
+sink, funded opening, adapter emitted/retained accounting, terminal
+insufficient-funds outcome, deadline expiry, and reasoned owner abort. Focused
+unit and model tests are local evidence only. The earlier checksums, readiness
+conclusion, audit statement, and claim that no repository-local gate remains
+do not approve this candidate; all clean-build, gas, chain, independent-review,
+migration, and release-evidence gates must be rerun for its exact commit.
+
+Update (2026-08-13): Juno Voice v2 uses fresh instantiation and imports no v1
+state, so its cutover must not call this contract's generic `migrate` entry
+point. That does not remove the upstream compatibility surface: migration from
+the explicitly supported historical gauge versions remains identity-guarded,
+bounded, atomic, and covered by unit and multitest regressions. The complete
+locked workspace suite and exact Rust 1.81 schema regeneration pass locally.
+A dirty-tree Rust 1.81 Wasm build, optimized diagnostically with Binaryen 132,
+produces a 676,970-byte orchestrator that passes the export allowlist,
+`wasm-tools 1.254.0`, and `cosmwasm-check 1.5.11`. Those results neither turn
+migration into a Juno deployment step nor replace a clean digest-pinned build.
+
 The dirty-tree Rust 1.81 validation build (linker metadata stripped, not the
 optimizer-built release) passed `cosmwasm-check 1.5.11`, Wasm validation, the
 800,000-byte cap, and exact export checks: orchestrator
@@ -106,9 +127,12 @@ from the clean reviewed commit before release.
 
 ## Local work not yet proved complete
 
-No known repository-local engineering gate remains from this readiness audit.
-Production approval still requires every external gate below; passing local
-verification is not a substitute for chain evidence or independent review.
+The 2026-08-12 candidate still needs accepted clean commits and their required
+clean-checkout CI, deterministic optimized artifacts from the digest-pinned
+builder, maximum-bound gas evidence, and exact-artifact integration with the
+Juno Voice registry adapter. The Juno deployment remains fresh-only. Passing
+the working-tree suites, schema checks, or diagnostic artifact checks is not a
+substitute for those gates or independent review.
 
 ## Genuinely external release gates
 

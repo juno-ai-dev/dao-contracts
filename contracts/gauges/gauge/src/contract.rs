@@ -26,8 +26,8 @@ use crate::state::{
     SnapshotEpoch, CONFIG, CURRENT_EPOCH, EPOCHS, EPOCH_BALLOTS, EPOCH_BALLOT_INDEX,
     EPOCH_BALLOT_POSITION, EPOCH_BALLOT_SEEN, EPOCH_OPTIONS, EPOCH_OPTION_INDEX, EPOCH_TALLY,
     EPOCH_VOTER_POWER, GAUGES, INVALID_OPTIONS, MAX_GAUGE_VOTES_PER_VOTER, NEXT_EPOCH_ID,
-    OPTION_BY_POINTS, POWER_SOURCE, RESET_CURSOR, SNAPSHOT_POLICIES, TALLY, TOTAL_CAST, VOTE_HOOKS,
-    VOTE_HOOK_REPLIES,
+    OPTION_BY_POINTS, POWER_SOURCE, RESET_CURSOR, SNAPSHOT_POLICIES, SNAPSHOT_POLICY_VERSIONS,
+    TALLY, TOTAL_CAST, VOTE_HOOKS, VOTE_HOOK_REPLIES,
 };
 use crate::{error::ContractError, state::Reset};
 
@@ -43,6 +43,7 @@ const MAX_HOOK_MEMBERS: usize = 100;
 const MAX_NFT_HOOK_TOKENS: usize = 100;
 const MAX_TITLE_BYTES: usize = 128;
 const MAX_OPTION_BYTES: usize = 128;
+const MAX_ABORT_REASON_BYTES: usize = 2_048;
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -1100,6 +1101,8 @@ mod health_query_tests {
                         });
                         to_json_binary(&SampleGaugeMsgsResponse {
                             execute: vec![message; MAX_ADAPTER_MESSAGES],
+                            emitted_value: None,
+                            retained_value: None,
                         })
                         .unwrap()
                     }
@@ -1136,6 +1139,8 @@ mod health_query_tests {
                         });
                         to_json_binary(&SampleGaugeMsgsResponse {
                             execute: vec![message; MAX_ADAPTER_MESSAGES + 1],
+                            emitted_value: None,
+                            retained_value: None,
                         })
                         .unwrap()
                     }
@@ -1424,6 +1429,10 @@ pub fn execute(
         ExecuteMsg::StopGauge { gauge } => execute::stop_gauge(deps, info.sender, gauge),
         ExecuteMsg::ResumeGauge { gauge } => execute::resume_gauge(deps, info.sender, gauge),
         ExecuteMsg::OpenEpoch { gauge } => execute::open_epoch(deps, env, info.sender, gauge),
+        ExecuteMsg::ExpireEpoch { gauge } => execute::expire_epoch(deps, env, info.sender, gauge),
+        ExecuteMsg::AbortEpoch { gauge, reason } => {
+            execute::abort_epoch(deps, env, info.sender, gauge, reason)
+        }
         ExecuteMsg::UpdateSnapshotPolicy { gauge, policy } => {
             execute::update_snapshot_policy(deps, info.sender, gauge, policy)
         }
@@ -1473,6 +1482,16 @@ fn validate_snapshot_policy(policy: &EpochSnapshotPolicy) -> Result<(), Contract
     }
     if policy.epoch_budget.is_zero() || policy.denom.is_empty() || policy.denom.len() > 128 {
         return Err(ContractError::InvalidEpochBudget {});
+    }
+    if policy.execution_window_seconds == 0 {
+        return Err(ContractError::InvalidExecutionWindow {});
+    }
+    if policy
+        .retained_option
+        .as_ref()
+        .is_some_and(|option| option.is_empty() || option.len() > MAX_OPTION_BYTES)
+    {
+        return Err(ContractError::InvalidRetainedOption {});
     }
     Ok(())
 }
@@ -1965,6 +1984,7 @@ mod execute {
         GAUGES.save(deps.storage, last_id, &gauge)?;
         if let Some(policy) = snapshot_policy {
             SNAPSHOT_POLICIES.save(deps.storage, last_id, &policy)?;
+            SNAPSHOT_POLICY_VERSIONS.save(deps.storage, last_id, &1)?;
             NEXT_EPOCH_ID.save(deps.storage, last_id, &1)?;
         }
         execute::add_adapter_options(deps.branch(), last_id, adapter_options)?;
@@ -2128,14 +2148,29 @@ mod execute {
         }
         GAUGES.load(deps.storage, gauge_id)?;
         validate_snapshot_policy(&policy)?;
+        let version = SNAPSHOT_POLICY_VERSIONS
+            .may_load(deps.storage, gauge_id)?
+            .unwrap_or(1)
+            .checked_add(1)
+            .ok_or(ContractError::SnapshotArithmetic {})?;
         SNAPSHOT_POLICIES.save(deps.storage, gauge_id, &policy)?;
+        SNAPSHOT_POLICY_VERSIONS.save(deps.storage, gauge_id, &version)?;
         Ok(Response::new()
             .add_attribute("action", "update_snapshot_policy")
             .add_attribute("sender", sender)
             .add_attribute("gauge_id", gauge_id.to_string())
+            .add_attribute("policy_version", version.to_string())
             .add_attribute("min_turnout_bps", policy.min_turnout_bps.to_string())
             .add_attribute("epoch_budget", policy.epoch_budget)
-            .add_attribute("denom", policy.denom))
+            .add_attribute("denom", &policy.denom)
+            .add_attribute(
+                "retained_option",
+                policy.retained_option.as_deref().unwrap_or("none"),
+            )
+            .add_attribute(
+                "execution_window_seconds",
+                policy.execution_window_seconds.to_string(),
+            ))
     }
 
     pub fn open_epoch(
@@ -2170,9 +2205,24 @@ mod execute {
         }
         let policy = SNAPSHOT_POLICIES.load(deps.storage, gauge_id)?;
         validate_snapshot_policy(&policy)?;
+        let policy_version = SNAPSHOT_POLICY_VERSIONS
+            .may_load(deps.storage, gauge_id)?
+            .unwrap_or(1);
+        let config = CONFIG.load(deps.storage)?;
+        let available_balance = deps
+            .querier
+            .query_balance(config.dao_core.clone(), policy.denom.clone())?
+            .amount;
+        if available_balance < policy.epoch_budget {
+            return Err(ContractError::InsufficientEpochFunding {
+                required: policy.epoch_budget,
+                available: available_balance,
+                denom: policy.denom,
+            });
+        }
         let snapshot_height = env.block.height;
         let total: TotalPowerAtHeightResponse = deps.querier.query_wasm_smart(
-            CONFIG.load(deps.storage)?.voting_powers,
+            config.voting_powers,
             &DaoQuery::TotalPowerAtHeight {
                 height: Some(snapshot_height),
             },
@@ -2199,6 +2249,14 @@ mod execute {
                 });
             }
         }
+        if let Some(retained_option) = &policy.retained_option {
+            if !seen.contains(retained_option.as_str()) {
+                return Err(ContractError::RetainedOptionMissing {
+                    gauge: gauge_id,
+                    option: retained_option.clone(),
+                });
+            }
+        }
 
         let epoch_id = NEXT_EPOCH_ID.may_load(deps.storage, gauge_id)?.unwrap_or(1);
         let next_id = epoch_id
@@ -2207,6 +2265,9 @@ mod execute {
         let closes_at = now
             .checked_add(gauge.epoch)
             .ok_or(ContractError::SnapshotArithmetic {})?;
+        let execution_deadline = closes_at
+            .checked_add(policy.execution_window_seconds)
+            .ok_or(ContractError::SnapshotArithmetic {})?;
         let epoch = SnapshotEpoch {
             gauge_id,
             epoch_id,
@@ -2214,11 +2275,18 @@ mod execute {
             snapshot_total_power: total.power,
             participating_power: Uint128::zero(),
             total_cast: Uint128::zero(),
+            retained_option: policy.retained_option,
+            retained_option_power: Uint128::zero(),
+            selected_project_power: Uint128::zero(),
+            emitted_value: Uint128::zero(),
+            retained_value: Uint128::zero(),
             min_turnout_bps: policy.min_turnout_bps,
+            policy_version,
             epoch_budget: policy.epoch_budget,
             denom: policy.denom,
             opens_at: now,
             closes_at,
+            execution_deadline,
             voter_count: 0,
             receipt_count: 0,
             option_count: options.len() as u32,
@@ -2250,10 +2318,113 @@ mod execute {
             .add_attribute("snapshot_total_power", total.power)
             .add_attribute("opens_at", now.to_string())
             .add_attribute("closes_at", closes_at.to_string())
+            .add_attribute("execution_deadline", execution_deadline.to_string())
+            .add_attribute("policy_version", epoch.policy_version.to_string())
             .add_attribute("min_turnout_bps", epoch.min_turnout_bps.to_string())
             .add_attribute("epoch_budget", epoch.epoch_budget)
-            .add_attribute("denom", epoch.denom)
+            .add_attribute("denom", &epoch.denom)
+            .add_attribute(
+                "retained_option",
+                epoch.retained_option.as_deref().unwrap_or("none"),
+            )
             .add_attribute("option_count", epoch.option_count.to_string()))
+    }
+
+    pub fn expire_epoch(
+        deps: DepsMut,
+        env: Env,
+        sender: Addr,
+        gauge_id: GaugeId,
+    ) -> Result<Response, ContractError> {
+        if !matches!(
+            load_power_source(deps.storage)?,
+            PowerSource::EpochSnapshot { .. }
+        ) {
+            return Err(ContractError::SnapshotModeRequired {});
+        }
+        let epoch_id =
+            CURRENT_EPOCH
+                .may_load(deps.storage, gauge_id)?
+                .ok_or(ContractError::EpochNotOpen {
+                    gauge: gauge_id,
+                    epoch: 0,
+                })?;
+        let mut epoch = EPOCHS.load(deps.storage, (gauge_id, epoch_id))?;
+        if epoch.outcome != EpochOutcome::Open {
+            return Err(ContractError::EpochNotOpen {
+                gauge: gauge_id,
+                epoch: epoch_id,
+            });
+        }
+        let now = env.block.time.seconds();
+        if now < epoch.execution_deadline {
+            return Err(ContractError::ExecutionDeadlineNotReached {
+                deadline: epoch.execution_deadline,
+                current: now,
+            });
+        }
+        let mut gauge = GAUGES.load(deps.storage, gauge_id)?;
+        epoch.outcome = EpochOutcome::Expired;
+        epoch.retained_value = epoch.epoch_budget;
+        gauge.last_executed_set = Some(vec![]);
+        gauge.next_epoch = now;
+        EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
+        GAUGES.save(deps.storage, gauge_id, &gauge)?;
+        Ok(snapshot_terminal_response(
+            "expire_snapshot_epoch",
+            &sender,
+            &epoch,
+            "expired",
+            0,
+        ))
+    }
+
+    pub fn abort_epoch(
+        deps: DepsMut,
+        env: Env,
+        sender: Addr,
+        gauge_id: GaugeId,
+        reason: String,
+    ) -> Result<Response, ContractError> {
+        if !matches!(
+            load_power_source(deps.storage)?,
+            PowerSource::EpochSnapshot { .. }
+        ) {
+            return Err(ContractError::SnapshotModeRequired {});
+        }
+        if sender != CONFIG.load(deps.storage)?.owner {
+            return Err(ContractError::Unauthorized {});
+        }
+        if reason.is_empty() || reason.len() > MAX_ABORT_REASON_BYTES {
+            return Err(ContractError::InvalidAbortReason {});
+        }
+        let epoch_id =
+            CURRENT_EPOCH
+                .may_load(deps.storage, gauge_id)?
+                .ok_or(ContractError::EpochNotOpen {
+                    gauge: gauge_id,
+                    epoch: 0,
+                })?;
+        let mut epoch = EPOCHS.load(deps.storage, (gauge_id, epoch_id))?;
+        if epoch.outcome != EpochOutcome::Open {
+            return Err(ContractError::EpochNotOpen {
+                gauge: gauge_id,
+                epoch: epoch_id,
+            });
+        }
+        let mut gauge = GAUGES.load(deps.storage, gauge_id)?;
+        epoch.outcome = EpochOutcome::Aborted {
+            reason: reason.clone(),
+        };
+        epoch.retained_value = epoch.epoch_budget;
+        gauge.last_executed_set = Some(vec![]);
+        gauge.next_epoch = env.block.time.seconds();
+        EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
+        GAUGES.save(deps.storage, gauge_id, &gauge)?;
+        Ok(
+            snapshot_terminal_response("abort_snapshot_epoch", &sender, &epoch, "aborted", 0)
+                .add_attribute("reason", reason),
+        )
     }
 
     pub fn cleanup_epoch(
@@ -2942,6 +3113,12 @@ mod execute {
             .map_err(|_| ContractError::TotalCastOverflow { gauge_id })?
             .checked_sub(Uint128::new(old_allocated))
             .map_err(|_| ContractError::TotalCastUnderflow { gauge_id })?;
+        epoch.retained_option_power = match epoch.retained_option.as_deref() {
+            Some(option) => {
+                Uint128::new(EPOCH_TALLY.load(deps.storage, (gauge_id, epoch_id, option))?)
+            }
+            None => Uint128::zero(),
+        };
 
         let revisions = match &previous {
             Some(ballot) => ballot
@@ -3015,6 +3192,11 @@ mod execute {
                 },
             )?;
         }
+        if epoch.total_cast > epoch.participating_power
+            || epoch.participating_power > epoch.snapshot_total_power
+        {
+            return Err(ContractError::SnapshotArithmetic {});
+        }
         EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
         Ok(Response::new()
             .add_attribute("action", "place_snapshot_vote")
@@ -3025,7 +3207,13 @@ mod execute {
             .add_attribute("voting_power", power)
             .add_attribute("option_count", new_votes.len().to_string())
             .add_attribute("participating_power", epoch.participating_power)
-            .add_attribute("total_cast", epoch.total_cast))
+            .add_attribute("allocated_power", epoch.total_cast)
+            .add_attribute("total_cast", epoch.total_cast)
+            .add_attribute("retained_option_power", epoch.retained_option_power)
+            .add_attribute(
+                "unallocated_power",
+                epoch.participating_power.saturating_sub(epoch.total_cast),
+            ))
     }
 
     pub fn add_hook(deps: DepsMut, sender: Addr, addr: String) -> Result<Response, ContractError> {
@@ -3162,24 +3350,36 @@ mod execute {
             .add_message(execute_msg))
     }
 
-    fn snapshot_execution_response(
+    fn snapshot_terminal_response(
+        action: &str,
         sender: &Addr,
         epoch: &SnapshotEpoch,
         outcome: &str,
         message_count: u32,
     ) -> Response {
         Response::new()
-            .add_attribute("action", "execute_snapshot_epoch")
+            .add_attribute("action", action)
             .add_attribute("sender", sender)
             .add_attribute("gauge_id", epoch.gauge_id.to_string())
             .add_attribute("epoch_id", epoch.epoch_id.to_string())
             .add_attribute("snapshot_height", epoch.snapshot_height.to_string())
             .add_attribute("snapshot_total_power", epoch.snapshot_total_power)
             .add_attribute("participating_power", epoch.participating_power)
+            .add_attribute("allocated_power", epoch.total_cast)
             .add_attribute("total_cast", epoch.total_cast)
+            .add_attribute("retained_option_power", epoch.retained_option_power)
+            .add_attribute(
+                "unallocated_power",
+                epoch.participating_power.saturating_sub(epoch.total_cast),
+            )
+            .add_attribute("selected_project_power", epoch.selected_project_power)
+            .add_attribute("emitted_value", epoch.emitted_value)
+            .add_attribute("retained_value", epoch.retained_value)
             .add_attribute("min_turnout_bps", epoch.min_turnout_bps.to_string())
+            .add_attribute("policy_version", epoch.policy_version.to_string())
             .add_attribute("epoch_budget", epoch.epoch_budget)
             .add_attribute("denom", &epoch.denom)
+            .add_attribute("execution_deadline", epoch.execution_deadline.to_string())
             .add_attribute("outcome", outcome)
             .add_attribute("message_count", message_count.to_string())
     }
@@ -3212,16 +3412,39 @@ mod execute {
                 current: now,
             });
         }
+        if now >= epoch.execution_deadline {
+            return Err(ContractError::ExecutionDeadlineReached {
+                deadline: epoch.execution_deadline,
+                current: now,
+            });
+        }
+        if epoch.participating_power.is_zero() {
+            epoch.outcome = EpochOutcome::NoDistributionZeroParticipation;
+            epoch.retained_value = epoch.epoch_budget;
+            gauge.last_executed_set = Some(vec![]);
+            gauge.next_epoch = now;
+            EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
+            GAUGES.save(deps.storage, gauge_id, &gauge)?;
+            return Ok(snapshot_terminal_response(
+                "execute_snapshot_epoch",
+                &sender,
+                &epoch,
+                "no_distribution_zero_participation",
+                0,
+            ));
+        }
         let turnout_left = Uint256::from(epoch.participating_power) * Uint256::from(10_000u128);
         let turnout_right = Uint256::from(epoch.snapshot_total_power)
             * Uint256::from(epoch.min_turnout_bps as u128);
         if turnout_left < turnout_right {
             epoch.outcome = EpochOutcome::NoDistributionTurnout;
+            epoch.retained_value = epoch.epoch_budget;
             gauge.last_executed_set = Some(vec![]);
             gauge.next_epoch = now;
             EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
             GAUGES.save(deps.storage, gauge_id, &gauge)?;
-            return Ok(snapshot_execution_response(
+            return Ok(snapshot_terminal_response(
+                "execute_snapshot_epoch",
                 &sender,
                 &epoch,
                 "no_distribution_turnout",
@@ -3240,54 +3463,60 @@ mod execute {
                 max: MAX_OPTIONS_PER_GAUGE,
             });
         }
+        candidates.retain(|(option, _)| epoch.retained_option.as_ref() != Some(option));
         candidates.sort_by(|(left_option, left_power), (right_option, right_power)| {
             right_power
                 .cmp(left_power)
                 .then_with(|| left_option.cmp(right_option))
         });
         let mut selected_with_powers = Vec::new();
-        if !epoch.total_cast.is_zero() {
-            for (option, power) in candidates {
-                if power == 0 {
+        for (option, power) in candidates {
+            if power == 0 {
+                continue;
+            }
+            if let Some(minimum) = gauge.min_percent_selected {
+                if Decimal::from_ratio(power, epoch.participating_power) < minimum {
                     continue;
-                }
-                if let Some(minimum) = gauge.min_percent_selected {
-                    if Decimal::from_ratio(power, epoch.total_cast.u128()) < minimum {
-                        continue;
-                    }
-                }
-                let validity: CheckOptionResponse = deps.querier.query_wasm_smart(
-                    gauge.adapter.clone(),
-                    &AdapterQueryMsg::CheckOption {
-                        option: option.clone(),
-                    },
-                )?;
-                if !validity.valid {
-                    continue;
-                }
-                let capped =
-                    gauge
-                        .max_available_percentage
-                        .map_or(Uint128::new(power), |maximum| {
-                            let limit = epoch.total_cast * maximum;
-                            Uint128::new(power).min(limit)
-                        });
-                if capped.is_zero() {
-                    continue;
-                }
-                selected_with_powers.push((option, capped));
-                if selected_with_powers.len() >= gauge.max_options_selected as usize {
-                    break;
                 }
             }
+            let validity: CheckOptionResponse = deps.querier.query_wasm_smart(
+                gauge.adapter.clone(),
+                &AdapterQueryMsg::CheckOption {
+                    option: option.clone(),
+                },
+            )?;
+            if !validity.valid {
+                continue;
+            }
+            let capped = gauge
+                .max_available_percentage
+                .map_or(Uint128::new(power), |maximum| {
+                    let limit = epoch.participating_power * maximum;
+                    Uint128::new(power).min(limit)
+                });
+            if capped.is_zero() {
+                continue;
+            }
+            selected_with_powers.push((option, capped));
+            if selected_with_powers.len() >= gauge.max_options_selected as usize {
+                break;
+            }
         }
+        epoch.selected_project_power = selected_with_powers
+            .iter()
+            .try_fold(Uint128::zero(), |total, (_, power)| {
+                total.checked_add(*power)
+            })
+            .map_err(|_| ContractError::SnapshotArithmetic {})?;
         gauge.last_executed_set = Some(selected_with_powers.clone());
         if selected_with_powers.is_empty() {
             epoch.outcome = EpochOutcome::NoEligibleOptions;
+            epoch.retained_value = epoch.epoch_budget;
             gauge.next_epoch = now;
             EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
             GAUGES.save(deps.storage, gauge_id, &gauge)?;
-            return Ok(snapshot_execution_response(
+            return Ok(snapshot_terminal_response(
+                "execute_snapshot_epoch",
                 &sender,
                 &epoch,
                 "no_eligible_options",
@@ -3299,7 +3528,7 @@ mod execute {
             .map(|(option, power)| {
                 (
                     option.clone(),
-                    Decimal::from_ratio(*power, epoch.total_cast),
+                    Decimal::from_ratio(*power, epoch.participating_power),
                 )
             })
             .collect::<Vec<_>>();
@@ -3323,8 +3552,46 @@ mod execute {
                 max: MAX_ADAPTER_MESSAGES,
             });
         }
+        let emitted_value = adapter_response
+            .emitted_value
+            .ok_or(ContractError::MissingAdapterAccounting {})?;
+        let retained_value = adapter_response
+            .retained_value
+            .ok_or(ContractError::MissingAdapterAccounting {})?;
+        let accounted = emitted_value
+            .checked_add(retained_value)
+            .map_err(|_| ContractError::InvalidAdapterAccounting {})?;
+        if accounted != epoch.epoch_budget
+            || emitted_value > epoch.epoch_budget
+            || (adapter_response.execute.is_empty() != emitted_value.is_zero())
+        {
+            return Err(ContractError::InvalidAdapterAccounting {});
+        }
         let message_count = u32::try_from(adapter_response.execute.len())
             .map_err(|_| ContractError::SnapshotArithmetic {})?;
+        if available_balance < emitted_value {
+            epoch.outcome = EpochOutcome::InsufficientFunds {
+                required: emitted_value,
+                available: available_balance,
+            };
+            epoch.emitted_value = Uint128::zero();
+            epoch.retained_value = epoch.epoch_budget;
+            gauge.last_executed_set = Some(selected_with_powers);
+            gauge.next_epoch = now;
+            EPOCHS.save(deps.storage, (gauge_id, epoch_id), &epoch)?;
+            GAUGES.save(deps.storage, gauge_id, &gauge)?;
+            return Ok(snapshot_terminal_response(
+                "execute_snapshot_epoch",
+                &sender,
+                &epoch,
+                "insufficient_funds",
+                0,
+            )
+            .add_attribute("required_value", emitted_value)
+            .add_attribute("available_balance", available_balance));
+        }
+        epoch.emitted_value = emitted_value;
+        epoch.retained_value = retained_value;
         if message_count == 0 {
             epoch.outcome = EpochOutcome::NoEligibleOptions;
         } else {
@@ -3338,7 +3605,13 @@ mod execute {
         } else {
             "distributed"
         };
-        let mut response = snapshot_execution_response(&sender, &epoch, outcome, message_count);
+        let mut response = snapshot_terminal_response(
+            "execute_snapshot_epoch",
+            &sender,
+            &epoch,
+            outcome,
+            message_count,
+        );
         if message_count > 0 {
             response = response.add_message(WasmMsg::Execute {
                 contract_addr: config.dao_core.to_string(),

@@ -34,6 +34,7 @@ pub enum PowerSource {
 
 pub const POWER_SOURCE: Item<PowerSource> = Item::new("power_source");
 pub const SNAPSHOT_POLICIES: Map<GaugeId, EpochSnapshotPolicy> = Map::new("snapshot_policies");
+pub const SNAPSHOT_POLICY_VERSIONS: Map<GaugeId, u64> = Map::new("snapshot_policy_versions");
 pub const CURRENT_EPOCH: Map<GaugeId, u64> = Map::new("current_epoch");
 pub const NEXT_EPOCH_ID: Map<GaugeId, u64> = Map::new("next_epoch_id");
 
@@ -45,11 +46,18 @@ pub struct SnapshotEpoch {
     pub snapshot_total_power: Uint128,
     pub participating_power: Uint128,
     pub total_cast: Uint128,
+    pub retained_option: Option<String>,
+    pub retained_option_power: Uint128,
+    pub selected_project_power: Uint128,
+    pub emitted_value: Uint128,
+    pub retained_value: Uint128,
     pub min_turnout_bps: u16,
+    pub policy_version: u64,
     pub epoch_budget: Uint128,
     pub denom: String,
     pub opens_at: u64,
     pub closes_at: u64,
+    pub execution_deadline: u64,
     pub voter_count: u32,
     pub receipt_count: u32,
     pub option_count: u32,
@@ -65,12 +73,21 @@ impl SnapshotEpoch {
             snapshot_height: self.snapshot_height,
             snapshot_total_power: self.snapshot_total_power,
             participating_power: self.participating_power,
+            allocated_power: self.total_cast,
             total_cast: self.total_cast,
+            retained_option: self.retained_option.clone(),
+            retained_option_power: self.retained_option_power,
+            unallocated_power: self.participating_power.saturating_sub(self.total_cast),
+            selected_project_power: self.selected_project_power,
+            emitted_value: self.emitted_value,
+            retained_value: self.retained_value,
             min_turnout_bps: self.min_turnout_bps,
+            policy_version: self.policy_version,
             epoch_budget: self.epoch_budget,
             denom: self.denom.clone(),
             opens_at: self.opens_at,
             closes_at: self.closes_at,
+            execution_deadline: self.execution_deadline,
             voter_count: self.voter_count,
             option_count: self.option_count,
             outcome: self.outcome.clone(),

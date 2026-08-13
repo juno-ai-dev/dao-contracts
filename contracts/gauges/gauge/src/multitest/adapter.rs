@@ -84,7 +84,11 @@ fn query(deps: Deps, _env: Env, msg: AdapterQueryMsg) -> Result<Binary, StdError
         }),
         AdapterQueryMsg::SampleGaugeMsgs { selected, .. } => {
             if RETURN_EMPTY.load(deps.storage)? {
-                return to_json_binary(&SampleGaugeMsgsResponse { execute: vec![] });
+                return to_json_binary(&SampleGaugeMsgsResponse {
+                    execute: vec![],
+                    emitted_value: None,
+                    retained_value: None,
+                });
             }
             let to_distribute = TO_DISTRIBUTE.load(deps.storage)?;
             let mut weights_sum = Decimal::zero();
@@ -101,7 +105,11 @@ fn query(deps: Deps, _env: Env, msg: AdapterQueryMsg) -> Result<Binary, StdError
                     })
                 })
                 .collect::<Vec<CosmosMsg>>();
-            to_json_binary(&SampleGaugeMsgsResponse { execute })
+            to_json_binary(&SampleGaugeMsgsResponse {
+                execute,
+                emitted_value: None,
+                retained_value: None,
+            })
         }
     }
 }

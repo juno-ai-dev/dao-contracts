@@ -641,7 +641,11 @@ mod query {
                 )
             })
             .collect::<StdResult<Vec<CosmosMsg>>>()?;
-        Ok(SampleGaugeMsgsResponse { execute })
+        Ok(SampleGaugeMsgsResponse {
+            execute,
+            emitted_value: None,
+            retained_value: None,
+        })
     }
 
     pub fn submission(deps: Deps, address: String) -> StdResult<SubmissionResponse> {

@@ -217,7 +217,11 @@ fn sample_gauge_msgs(
             }
         })
         .collect::<StdResult<Vec<CosmosMsg>>>()?;
-    Ok(SampleGaugeMsgsResponse { execute })
+    Ok(SampleGaugeMsgsResponse {
+        execute,
+        emitted_value: None,
+        retained_value: None,
+    })
 }
 
 fn send_message(to: String, budget: &Coin, amount: Uint128) -> CosmosMsg {

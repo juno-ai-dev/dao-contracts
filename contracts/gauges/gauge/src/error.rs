@@ -32,6 +32,22 @@ pub enum ContractError {
     #[error("Snapshot epoch budget and native denomination must be nonzero")]
     InvalidEpochBudget {},
 
+    #[error("Snapshot execution window must be greater than zero")]
+    InvalidExecutionWindow {},
+
+    #[error("Snapshot retained option is invalid")]
+    InvalidRetainedOption {},
+
+    #[error("Configured retained option {option} is absent from gauge {gauge}")]
+    RetainedOptionMissing { gauge: u64, option: String },
+
+    #[error("Program Vault balance {available} is below epoch budget {required} {denom}")]
+    InsufficientEpochFunding {
+        required: Uint128,
+        available: Uint128,
+        denom: String,
+    },
+
     #[error("Snapshot epoch {epoch} for gauge {gauge} is not open")]
     EpochNotOpen { gauge: u64, epoch: u64 },
 
@@ -43,6 +59,17 @@ pub enum ContractError {
 
     #[error("Snapshot epoch voting remains open until {closes_at}; current time is {current}")]
     SnapshotVotingOpen { closes_at: u64, current: u64 },
+
+    #[error(
+        "Snapshot epoch execution deadline {deadline} has been reached; current time is {current}"
+    )]
+    ExecutionDeadlineReached { deadline: u64, current: u64 },
+
+    #[error("Snapshot epoch cannot expire before deadline {deadline}; current time is {current}")]
+    ExecutionDeadlineNotReached { deadline: u64, current: u64 },
+
+    #[error("Epoch abort reason must contain 1 to 2048 bytes")]
+    InvalidAbortReason {},
 
     #[error("Historical total voting power at height {height} is zero")]
     ZeroSnapshotTotalPower { height: u64 },
@@ -130,6 +157,12 @@ pub enum ContractError {
 
     #[error("Adapter returned too many execution messages: {count}; maximum is {max}")]
     TooManyAdapterMessages { count: usize, max: usize },
+
+    #[error("Snapshot adapter omitted emitted/retained value accounting")]
+    MissingAdapterAccounting {},
+
+    #[error("Snapshot adapter returned inconsistent emitted/retained value accounting")]
+    InvalidAdapterAccounting {},
 
     #[error("{field} exceeds maximum byte length {max}")]
     StringTooLong { field: String, max: usize },

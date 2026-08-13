@@ -41,6 +41,15 @@ pub struct CheckOptionResponse {
 #[cw_serde]
 pub struct SampleGaugeMsgsResponse {
     pub execute: Vec<CosmosMsg>,
+    /// Total native value represented by `execute` for an epoch-snapshot
+    /// request. Legacy/hook-mode adapters may omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitted_value: Option<Uint128>,
+    /// Portion of the supplied epoch budget that remains unspent. Snapshot
+    /// adapters return this together with `emitted_value`; legacy adapters may
+    /// omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_value: Option<Uint128>,
 }
 
 /// Validates the allocation invariant adapters rely on before constructing
